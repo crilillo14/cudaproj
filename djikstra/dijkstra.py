@@ -60,48 +60,52 @@ def visualize_graph(graph, path=None):
     # Get position layout for nodes
     pos = nx.spring_layout(G)
 
-    plt.figure(figsize=(10,8))
+    plt.figure(figsize=(20,8))
     
-    # Draw edges
+    # Create two subplots
+    plt.subplot(121)
+    
+    # Draw edges for first graph
     nx.draw_networkx_edges(G, pos, edge_color='gray')
+    nx.draw_networkx_nodes(G, pos, node_color='lightblue', node_size=500)
+    nx.draw_networkx_labels(G, pos)
+    edge_labels = nx.get_edge_attributes(G, 'weight')
+    nx.draw_networkx_edge_labels(G, pos, edge_labels=edge_labels)
+    plt.title("Original Graph")
+    plt.axis('off')
     
-    # If path is provided, highlight the path edges
+    # Draw second graph with path if provided
+    plt.subplot(122)
+    nx.draw_networkx_edges(G, pos, edge_color='gray')
     if path:
         path_edges = list(zip(path[:-1], path[1:]))
         nx.draw_networkx_edges(G, pos, edgelist=path_edges, edge_color='r', width=2)
-    
-    # Draw nodes
-    if path:
-        # Color nodes in the path differently
         node_colors = ['red' if node in path else 'lightblue' for node in G.nodes()]
         nx.draw_networkx_nodes(G, pos, node_color=node_colors, node_size=500)
     else:
         nx.draw_networkx_nodes(G, pos, node_color='lightblue', node_size=500)
-    
     nx.draw_networkx_labels(G, pos)
-    
-    # Add edge labels
-    edge_labels = nx.get_edge_attributes(G, 'weight')
     nx.draw_networkx_edge_labels(G, pos, edge_labels=edge_labels)
-    
-    plt.title("Graph Visualization")
+    plt.title("Graph with Shortest Path")
     plt.axis('off')
+    
     plt.show()
         
 
 if __name__ == "__main__":
     graph = {
-        'A': {'B': 1, 'C': 4},
-        'B': {'A': 1, 'C': 2, 'D': 5},
-        'C': {'A': 4, 'B': 2, 'D': 1},
-        'D': {'B': 5, 'C': 1}
+        'A': {'B': 1, 'C': 4, 'E': 3},
+        'B': {'A': 1, 'C': 2, 'D': 5, 'F': 2},
+        'C': {'A': 4, 'B': 2, 'D': 1, 'E': 5},
+        'D': {'B': 5, 'C': 1, 'F': 3},
+        'E': {'A': 3, 'C': 5, 'F': 4},
+        'F': {'B': 2, 'D': 3, 'E': 4}
     }
     
-    # First show the graph without path
-    visualize_graph(graph)
-    
-    # Then show the shortest path
-    path, distance = dijkstra(graph, 'A', 'D')
+    # Find shortest path
+    path, distance = dijkstra(graph, 'C', 'D')
     print(f"Shortest path: {path}")
     print(f"Total distance: {distance}")
+    
+    # Show both graphs side by side
     visualize_graph(graph, path)
