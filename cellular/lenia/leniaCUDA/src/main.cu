@@ -4,16 +4,22 @@
 #include <unistd.h> // time.sleep equivalent
 #include <time.h>
 #include <math.h>
+#include <thread>
+#include <chrono>
+#include <iostream>
+#include <cstdio>
+#include <cmath>
+#include <algorithm>
 
-#define N 100
+#define N 50
 
 // kernel params
 #define RADIUS 5
-#define SIGMA 1.0
+#define SIGMA 3.0
 
 // Growth function parameters
-#define GROWTH_CENTER 0.15
-#define GROWTH_WIDTH 0.02
+#define GROWTH_CENTER 0.5
+#define GROWTH_WIDTH 0.5
 
 // time step between states
 #define DT 0.1
@@ -43,15 +49,15 @@ __device__ double growthFunc(double x) {
 }
 
 // CUDA kernel for one step of the simulation
-__global__ void leniaKernel(double *C, double *kernel, double *newC, double dt) {
+__global__ void leniaKernel(double *C, double *kernel, double *newC) {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     int j = blockIdx.y * blockDim.y + threadIdx.y;
-    
+
     if (i < N && j < N) {
         double U = 0.0;
         convolution(C, kernel, i, j, &U);
         double A = growthFunc(U);
-        newC[i * N + j] = C[i * N + j] + dt * (A - 0.5) * 2;
+        newC[i * N + j] = C[i * N + j] + DT * A;
         newC[i * N + j] = fmin(fmax(newC[i * N + j], 0.0), 1.0); // Clamp values to [0, 1]
     }
 }
@@ -93,6 +99,42 @@ void initGrid(double *C) {
     }
 }
 
+void initGridGlider(double* grid) {
+    // Initialize grid to 0 (off)
+    for (int i = 0; i < N; ++i) {
+        for (int j = 0; j < N; ++j) {
+            grid[i * N + j] = 0.0f;
+        }
+    }
+
+    // Set up a simple glider pattern in the center
+    int mid = N / 2;
+    grid[(mid) * N + (mid)] = 1.0f;     // Cell 1
+    grid[(mid+1) * N + (mid+1)] = 1.0f; // Cell 2
+    grid[(mid+2) * N + (mid-1)] = 1.0f; // Cell 3
+    grid[(mid+2) * N + mid] = 1.0f;     // Cell 4
+    grid[(mid+1) * N + (mid-1)] = 1.0f; // Cell 5
+}
+
+void initGridChunks(double* grid) {
+    // Initialize grid to 0 (off)
+    for (int i = 0; i < N; ++i) {
+        for (int j = 0; j < N; ++j) {
+            grid[i * N + j] = 0.0f;
+        }
+    }
+
+    // Randomly activate a block of cells
+    int block_size = N / 4;
+    int start_row = N / 4;
+    int start_col = N / 4;
+    for (int i = start_row; i < start_row + block_size; ++i) {
+        for (int j = start_col; j < start_col + block_size; ++j) {
+            grid[i * N + j] = (rand() % 2);  // Random on/off (1/0) for a small block
+        }
+    }
+}
+
 
 void printGrid(double *C) {
     for (int i = 0; i < N; i++) {
@@ -104,11 +146,11 @@ void printGrid(double *C) {
 }
 
 
-// Maps a double value between 0 and 1 to an ASCII character
+// Map the value to one of the four density characters
 char valueToAscii(double value) {
     // Define ASCII characters from least dense to most dense
-    const char *density = " .:-=+*#%@";
-    const int numChars = 10;  // Length of the density string
+    const char *density = "░▒▓█";
+    const int numChars = 4;  // Length of the density string
 
     // Ensure value is between 0 and 1
     value = fmin(fmax(value, 0.0), 1.0);
@@ -119,7 +161,31 @@ char valueToAscii(double value) {
     return density[index];
 }
 
-// Print the grid using ASCII characters
+
+// Map the value to a colored block
+void valueToColor(double value) {
+    // Ensure value is between 0 and 1
+    value = fmin(fmax(value, 0.0), 1.0);
+
+    // Define ANSI color codes for different ranges of values
+    const char *color;
+
+    if (value < 0.25) {
+        color = "\033[48;5;33m"; // Light blue background
+    } else if (value < 0.5) {
+        color = "\033[48;5;39m"; // Green background
+    } else if (value < 0.75) {
+        color = "\033[48;5;226m"; // Yellow background
+    } else {
+        color = "\033[48;5;196m"; // Red background
+    }
+
+    // Print the character with the selected background color
+    printf("%s  ", color); // Print a space for better readability
+    printf("\033[0m"); // Reset color to default
+}
+
+
 void printGridASCII(double *C) {
     // Clear screen using ANSI escape code
     printf("\033[2J\033[H");
@@ -133,8 +199,7 @@ void printGridASCII(double *C) {
     for (int i = 0; i < N; i++) {
         printf("|");  // Left border
         for (int j = 0; j < N; j++) {
-            char ascii = valueToAscii(C[i * N + j]);
-            printf("%c", ascii);
+            valueToColor(C[i * N + j]);
         }
         printf("|\n");  // Right border
     }
@@ -144,14 +209,101 @@ void printGridASCII(double *C) {
     for (int j = 0; j < N; j++) printf("-");
     printf("+\n");
 
-        // Print legend
-    printf("\nDensity Scale: ");
-    for (int i = 0; i < 10; i++) {
-        printf("%c", valueToAscii(i / 9.0));
-    }
-    printf("\n0.0 -------- 1.0\n");
-
+    // Reset the color back to default after the grid
+    printf("\033[0m");
 }
+
+// ALTERNATIVE APPROACH -- THERMAL COLORING WITH ANSI ESCAPE CODES
+
+// Map the value to a colored block with a thermal gradient
+void valueToThermalColor(double value) {
+    // Ensure value is between 0 and 1
+    value = fmin(fmax(value, 0.0), 1.0);
+
+    // Map the value to an index in the thermal gradient
+    int colorIndex = (int)(value * 255);  // Map to 0-255 for the full spectrum
+
+    // Use ANSI escape codes to apply background color based on the thermal gradient
+    printf("\033[48;5;%dm  ", colorIndex); // Print the colored block
+    printf("\033[0m"); // Reset the color to default
+}
+
+// Print the grid using the thermal gradient colors
+void printGridThermal(double *C) {
+    // Clear screen using ANSI escape code
+    printf("\033[2J\033[H");
+
+    // Print grid content without borders
+    for (int i = 0; i < N; i++) {
+        for (int j = 0; j < N; j++) {
+            valueToThermalColor(C[i * N + j]);  // Print colored block
+        }
+        printf("\n");  // Newline after each row
+    }
+
+    // Reset color back to default after the grid
+    printf("\033[0m");
+}
+
+
+// Helper function: Interpolate between two values
+double lerp(double a, double b, double t) {
+    return a + t * (b - a);
+}
+
+// Map value to Viridis gradient color
+void valueToViridisColor(double value) {
+    // Ensure value is between 0 and 1
+    value = fmin(fmax(value, 0.0), 1.0);
+
+    // Viridis RGB control points (normalized from 0 to 1)
+    const double viridis[6][3] = {
+        {0.267, 0.004, 0.329},  // Dark blue (low)
+        {0.282, 0.140, 0.457},
+        {0.253, 0.265, 0.529},
+        {0.163, 0.471, 0.558},
+        {0.134, 0.658, 0.517},
+        {0.993, 0.906, 0.144}   // Yellow (high)
+    };
+
+    // Map value to one of the 5 segments
+    int idx = (int)(value * 5.0);
+    double segmentT = (value * 5.0) - idx;
+
+    // Linearly interpolate between the two colors in the segment
+    double r = lerp(viridis[idx][0], viridis[idx + 1][0], segmentT);
+    double g = lerp(viridis[idx][1], viridis[idx + 1][1], segmentT);
+    double b = lerp(viridis[idx][2], viridis[idx + 1][2], segmentT);
+
+    // Scale RGB values to 0-255
+    int R = (int)(r * 255);
+    int G = (int)(g * 255);
+    int B = (int)(b * 255);
+
+    // Use ANSI escape codes for 24-bit RGB color
+    printf("\033[48;2;%d;%d;%dm  \033[0m", R, G, B);
+}
+
+// Print grid using Viridis gradient colors
+void printGridViridis(double *C) {
+    // Clear screen using ANSI escape codes
+    printf("\033[2J\033[H");
+    // printf("\n");
+    // Print grid content without borders
+    for (int i = 0; i < N; i++) {
+        for (int j = 0; j < N; j++) {
+            valueToViridisColor(C[i * N + j]);  // Print colored block
+        }
+        printf("\n");  // Newline after each row
+    }
+
+    // Reset color to default after printing
+    printf("\033[0m");
+}
+
+
+
+
 // Main function
 int main() {
     // ha is C on host, da is C on device, dKernel is the kernel on device, dNewC is the new C on device
@@ -161,53 +313,63 @@ int main() {
     int size = N * N * sizeof(double);
 
     // kernel measured from convolution center with radius, thats why size of kernel arry is 2*RADIUS+1
-    double kernelSize = (2 * RADIUS + 1) * (2 * RADIUS + 1) * sizeof(double);
+    size_t kernelSize = (2 * RADIUS + 1) * (2 * RADIUS + 1) * sizeof(double);
 
 
     ha = (double *)malloc(size);
     cudaMalloc((void **)&da, size);
     cudaMalloc((void **)&dKernel, kernelSize);
     cudaMalloc((void **)&dNewC, size);
-    
+
     // Initialize grid and kernel on host
-    initGrid(ha);
+    // initGrid(ha);
+    //initGridGlider(ha);
+    initGridChunks(ha);
     double *hostKernel = (double *)malloc(kernelSize);
     // initGaussianKernel(hostKernel);
-    initDonutKernel(hostKernel, kernelSize, RADIUS/2.0, SIGMA);
+    initDonutKernel(hostKernel, (2 * RADIUS + 1), RADIUS / 2.0, SIGMA);
+
     // Copy data to device
     cudaMemcpy(da, ha, size, cudaMemcpyHostToDevice);
     cudaMemcpy(dKernel, hostKernel, kernelSize, cudaMemcpyHostToDevice);
-    
+
     // Print initial state
     printf("Initial state:\n");
-    printGridASCII(ha);
-    
+    // printGridASCII(ha);
+    // printGridThermal(ha);
+    printGridViridis(ha);
+
     // Run sim 100 times
     // given by ai, not sure optimal values
     int threadsPerBlock = 16;
     dim3 blockSize(threadsPerBlock, threadsPerBlock);
     dim3 gridSize((N + threadsPerBlock - 1) / threadsPerBlock, (N + threadsPerBlock - 1) / threadsPerBlock);
 
-    
-    
-    for (int step = 0; step < 100; step++) {
+
+
+    for (int step = 0; step < NUMSTEPS; step++) {
         leniaKernel<<<gridSize, blockSize>>>(da, dKernel, dNewC);
         cudaDeviceSynchronize();
-        
-        printGrid(ha);
+
+        // std::this_thread::sleep_for(std::chrono::milliseconds(200));
+
+        // printGridASCII(ha);
+        // printGridThermal(ha);
+        printGridViridis(ha);
         cudaMemcpy(ha, dNewC, size, cudaMemcpyDeviceToHost);
     }
-    
+
     // Print the final state
     printf("\nFinal state after 100 steps:\n");
-    printGrid(ha);
-    
+    // printGridASCII(ha);
+    // printGridThermal(ha);
+    printGridViridis(ha);
     // Free memory
     free(ha);
     free(hostKernel);
     cudaFree(da);
     cudaFree(dKernel);
     cudaFree(dNewC);
-    
+
     return 0;
 }
