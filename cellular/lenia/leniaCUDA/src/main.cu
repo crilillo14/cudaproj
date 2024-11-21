@@ -9,26 +9,26 @@
 #include <iostream>
 #include <cstdio>
 #include <cmath>
-#include <algorithm>
 
-#define N 50
 
+#define N 54
 // kernel params
-#define RADIUS 5
-#define SIGMA 3.0
-
+#define RADIUS 12
+#define SIGMA 2.5
 // Growth function parameters
-#define GROWTH_CENTER 0.5
-#define GROWTH_WIDTH 0.5
-
+#define GROWTH_CENTER 0.18
+#define GROWTH_WIDTH 0.06
 // time step between states
-#define DT 10
-
+#define DT 0.1
 // number of steps
-#define NUMSTEPS 100
+#define NUMSTEPS 90
 
 
-__device__ void convolution(double *C, double *kernel, int i, int j, double *result) {
+
+
+// device functions
+
+__device__ void convolution(double *C, double *kernel, int i, int j, double *result , double kernelMax) {
     int kernelSize = 2 * RADIUS + 1;
     double sum = 0.0;
     for (int ki = -RADIUS; ki <= RADIUS; ki++) {
@@ -40,59 +40,125 @@ __device__ void convolution(double *C, double *kernel, int i, int j, double *res
             }
         }
     }
-    *result = sum;
+    *result = sum / kernelMax;
 }
 
-// CUDA kernel for the growth function (Gaussian function)
+
+
+// Gaussian based growthfunc.
 __device__ double growthFunc(double x) {
-    return 2.0 * exp(-0.5 * pow((x - GROWTH_CENTER) / GROWTH_WIDTH, 2)) - 1.0;
+    double normalized = exp(-0.5 * pow((x - GROWTH_CENTER) / GROWTH_WIDTH, 2));
+    return 2 * normalized - 1;
 }
 
-// CUDA kernel for one step of the simulation
-__global__ void leniaKernel(double *C, double *kernel, double *newC) {
+
+
+
+// main kernel
+
+__global__ void leniaKernel(double *C, double *kernel, double *newC, double kernelMax) {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     int j = blockIdx.y * blockDim.y + threadIdx.y;
 
     if (i < N && j < N) {
         double U = 0.0;
-        convolution(C, kernel, i, j, &U);
+        convolution(C, kernel, i, j, &U, kernelMax);
+
+        // Debugging convolution result
+        // printf("Thread (%d, %d): Convolution result U = %f\n", i, j, U);
+
         double A = growthFunc(U);
-        newC[i * N + j] = C[i * N + j] + DT * A;
-        newC[i * N + j] = fmin(fmax(newC[i * N + j], 0.0), 1.0); // Clamp values to [0, 1]
+        // printf("Thread (%d, %d): Growth result A = %f\n", i, j, A);
+        // printf("Thread (%d, %d) ; previous state = %f , next state :%f" , i , j, C[i*N+j] , C[i * N + j] + DT * A);
+        newC[i * N + j] = C[i * N + j] + DT * A ;
+
+        // Clamp values to [0, 1] and debug final state
+        newC[i * N + j] = fmin(fmax(newC[i * N + j], 0.0), 1.0);
+        // printf("Thread (%d, %d): Updated newC = %f\n", i, j, newC[i * N + j]);
     }
 }
 
-// Host function to initialize the Gaussian kernel
-void initGaussianKernel(double *kernel, double kernelMax) {
-    int kernelSize = 2 * RADIUS + 1;
 
+
+// _____________________________  KERNELS __________________________
+
+
+
+
+// Host function to initialize the Gaussian kernel
+void initGaussianKernel(double *kernel) {
+    int kernelSize = 2 * RADIUS + 1;
 
     for (int i = -RADIUS; i <= RADIUS; i++) {
         for (int j = -RADIUS; j <= RADIUS; j++) {
             int idx = (i + RADIUS) * kernelSize + (j + RADIUS);
             kernel[idx] = exp(-0.5 * (i * i + j * j) / (SIGMA * SIGMA));
+        }
+    }
+}
+
+double getKernelMax(double *kernel) {
+    int kernelSize = 2 * RADIUS + 1;
+    double kernelMax = 0.0;
+
+    for (int i = -RADIUS; i <= RADIUS; i++) {
+        for (int j = -RADIUS; j <= RADIUS; j++) {
+            int idx = (i + RADIUS) * kernelSize + (j + RADIUS);
             kernelMax += kernel[idx];
         }
     }
+
+    return kernelMax;
 }
 
-// not in use
-// use either this or the gaussian kernel
-void initDonutKernel(double *kernel, int kernelSize, double radius, double sigma) {
-    int center = kernelSize / 2;
+void initRippleKernel(double *kernel) {
+    int kernelSize = 2 * RADIUS + 1;
+    double strength = 1.0;
+    double radius = RADIUS;
 
-    for (int i = 0; i < kernelSize; i++) {
-        for (int j = 0; j < kernelSize; j++) {
-            // Calculate distance from center
-            double dist = sqrt(pow(i - center, 2) + pow(j - center, 2));
+    for (int i = -RADIUS; i <= RADIUS; i++) {
+        for (int j = -RADIUS; j <= RADIUS; j++) {
+            int idx = (i + RADIUS) * kernelSize + (j + RADIUS);
+            double distance = sqrt(i * i + j * j);
 
-            // Calculate donut shape with peak at specified radius
-            kernel[i * kernelSize + j] = exp(-pow(dist - radius, 2) / (2 * sigma * sigma));
+            // Create wave-like effects using sine function
+            if (distance < radius) {
+                kernel[idx] = strength * sin(distance / radius * M_PI);
+            } else {
+                kernel[idx] = 0.0;
+            }
         }
     }
 }
 
-// random initialization
+
+void initDonutKernel(double *kernel) {
+    int kernelSize = 2 * RADIUS + 1;
+
+    double innerSigma = SIGMA / 2.0; // Controls the "hole" size
+    double outerSigma = SIGMA;      // Controls the overall radius of the donut
+
+    for (int i = -RADIUS; i <= RADIUS; i++) {
+        for (int j = -RADIUS; j <= RADIUS; j++) {
+            int idx = (i + RADIUS) * kernelSize + (j + RADIUS);
+            double distanceSquared = i * i + j * j;
+
+            // Outer Gaussian
+            double outer = exp(-0.5 * distanceSquared / (outerSigma * outerSigma));
+            // Inner Gaussian (negative contribution)
+            double inner = exp(-0.5 * distanceSquared / (innerSigma * innerSigma));
+
+            // Donut shape by subtracting inner Gaussian from outer Gaussian
+            kernel[idx] = outer - inner;
+        }
+    }
+
+}
+
+
+// ___________________________ GRID CONFIGS ______________________
+
+
 void initGrid(double *C) {
     srand(time(NULL));  // Initialize random seed with current time
     for (int i = 0; i < N; i++) {
@@ -102,13 +168,36 @@ void initGrid(double *C) {
     }
 }
 
+void initRandomSparseGrid(double *grid) {
+    for (int i = 0; i < N * N; i++) {
+        grid[i] = (rand() % 10 == 0) ? 1.0 : 0.0; // Randomly place "cells" at sparse intervals
+    }
+}
 
+void initLobeKernel(double *kernel) {
+    int kernelSize = 2 * RADIUS + 1;
+    double strength = 1.0;
+    double lobeAngle = M_PI / 4.0;  // Width of each lobe
 
+    for (int i = -RADIUS; i <= RADIUS; i++) {
+        for (int j = -RADIUS; j <= RADIUS; j++) {
+            int idx = (i + RADIUS) * kernelSize + (j + RADIUS);
+            double distance = sqrt(i * i + j * j);
+            double angle = atan2(j, i);
 
-
-
-
-
+            // Create lobe-like structures
+            if (distance < RADIUS) {
+                if (fmod(angle, lobeAngle) < 0.2) {
+                    kernel[idx] = strength;
+                } else {
+                    kernel[idx] = 0.0;
+                }
+            } else {
+                kernel[idx] = 0.0;
+            }
+        }
+    }
+}
 
 
 // Helper function: Interpolate between two values
@@ -152,8 +241,8 @@ void valueToViridisColor(double value) {
 // Print grid using Viridis gradient colors
 void printGridViridis(double *C) {
     // Clear screen using ANSI escape codes
-    printf("\033[2J\033[H");
-    // printf("\n");
+    // printf("\033[2J\033[H");
+    printf("\n");
     // Print grid content without borders
     for (int i = 0; i < N; i++) {
         for (int j = 0; j < N; j++) {
@@ -179,7 +268,6 @@ int main() {
 
     // kernel measured from convolution center with radius, thats why size of kernel arry is 2*RADIUS+1
     size_t kernelSize = (2 * RADIUS + 1) * (2 * RADIUS + 1) * sizeof(double);
-    double kernelMax = 0.0;
 
 
     ha = (double *)malloc(size);
@@ -188,11 +276,20 @@ int main() {
     cudaMalloc((void **)&dNewC, size);
 
     // Initialize grid and kernel on host
-    // initGrid(ha);
+    initGrid(ha);
+    // initRandomSparseGrid(ha);
     //initGridGlider(ha);
-    initGridChunks(ha);
+    // initGridChunks(ha);
+
+
+
     double *hostKernel = (double *)malloc(kernelSize);
-    initGaussianKernel(hostKernel , kernelMax);
+    // initGaussianKernel(hostKernel);
+    // initDonutKernel(hostKernel);
+    // initLobeKernel(hostKernel);
+    initRippleKernel(hostKernel);
+    double kernelMax = getKernelMax(hostKernel);
+    printf("kernel max: %f\n" , kernelMax);
     // initDonutKernel(hostKernel, (2 * RADIUS + 1), RADIUS / 2.0, SIGMA);
 
     // Copy data to device
@@ -205,28 +302,31 @@ int main() {
     // printGridThermal(ha);
     printGridViridis(ha);
 
-    // Run sim 100 times
+    // Run sim NUMSTEPS times
     // given by ai, not sure optimal values
     int threadsPerBlock = 16;
     dim3 blockSize(threadsPerBlock, threadsPerBlock);
     dim3 gridSize((N + threadsPerBlock - 1) / threadsPerBlock, (N + threadsPerBlock - 1) / threadsPerBlock);
 
-
-
     for (int step = 0; step < NUMSTEPS; step++) {
-        leniaKernel<<<gridSize, blockSize>>>(da, dKernel, dNewC);
+        leniaKernel<<<gridSize, blockSize>>>(da, dKernel, dNewC, kernelMax);
         cudaDeviceSynchronize();
 
-        // std::this_thread::sleep_for(std::chrono::milliseconds(200));
+        // std::this_thread::sleep_for(std::chrono::milliseconds(20));
+
+        double *temp = dNewC;
+        da = dNewC;
+        dNewC = temp;
 
         // printGridASCII(ha);
         // printGridThermal(ha);
         printGridViridis(ha);
-        cudaMemcpy(ha, dNewC, size, cudaMemcpyDeviceToHost);
+
+        cudaMemcpy(ha, da, size, cudaMemcpyDeviceToHost);
     }
 
     // Print the final state
-    printf("\nFinal state after 100 steps:\n");
+    printf("\nFinal state after %d steps:\n", NUMSTEPS);
     // printGridASCII(ha);
     // printGridThermal(ha);
     printGridViridis(ha);
@@ -238,4 +338,3 @@ int main() {
     cudaFree(dNewC);
 
     return 0;
-}
