@@ -102,21 +102,23 @@ class Lenia:
 # Example usage:
 if __name__ == "__main__":
     N = 50  # Increased grid size
-    dt = 0.2
+    dt = 0.05
     steps = 200
     
 
     C_0 = np.random.rand(N, N)
+    # Visualize initial state
+    
     
     # Initialize C_0 with a circular pattern in the center
     
 
     lenia = Lenia(
         C_0=C_0,
-        kernel_radius=4,  # Increased radius
-        kernel_sigma=3.0,  # Adjusted sigma
-        growth_center=0.5,  # Centered growth
-        growth_width=0.1,  # Reasonable growth width
+        kernel_radius=12,  # Increased radius
+        kernel_sigma=2.5,  # Adjusted sigma
+        growth_center=0.15,  # Centered growth
+        growth_width=0.05,  # Reasonable growth width
     )
     
     # Uncomment to debug kernel

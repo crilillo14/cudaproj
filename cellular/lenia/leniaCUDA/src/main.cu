@@ -22,7 +22,7 @@
 #define GROWTH_WIDTH 0.5
 
 // time step between states
-#define DT 0.1
+#define DT 10
 
 // number of steps
 #define NUMSTEPS 100
@@ -63,17 +63,20 @@ __global__ void leniaKernel(double *C, double *kernel, double *newC) {
 }
 
 // Host function to initialize the Gaussian kernel
-void initGaussianKernel(double *kernel) {
+void initGaussianKernel(double *kernel, double kernelMax) {
     int kernelSize = 2 * RADIUS + 1;
+
 
     for (int i = -RADIUS; i <= RADIUS; i++) {
         for (int j = -RADIUS; j <= RADIUS; j++) {
             int idx = (i + RADIUS) * kernelSize + (j + RADIUS);
             kernel[idx] = exp(-0.5 * (i * i + j * j) / (SIGMA * SIGMA));
+            kernelMax += kernel[idx];
         }
     }
 }
 
+// not in use
 // use either this or the gaussian kernel
 void initDonutKernel(double *kernel, int kernelSize, double radius, double sigma) {
     int center = kernelSize / 2;
@@ -89,7 +92,7 @@ void initDonutKernel(double *kernel, int kernelSize, double radius, double sigma
     }
 }
 
-
+// random initialization
 void initGrid(double *C) {
     srand(time(NULL));  // Initialize random seed with current time
     for (int i = 0; i < N; i++) {
@@ -99,151 +102,13 @@ void initGrid(double *C) {
     }
 }
 
-void initGridGlider(double* grid) {
-    // Initialize grid to 0 (off)
-    for (int i = 0; i < N; ++i) {
-        for (int j = 0; j < N; ++j) {
-            grid[i * N + j] = 0.0f;
-        }
-    }
-
-    // Set up a simple glider pattern in the center
-    int mid = N / 2;
-    grid[(mid) * N + (mid)] = 1.0f;     // Cell 1
-    grid[(mid+1) * N + (mid+1)] = 1.0f; // Cell 2
-    grid[(mid+2) * N + (mid-1)] = 1.0f; // Cell 3
-    grid[(mid+2) * N + mid] = 1.0f;     // Cell 4
-    grid[(mid+1) * N + (mid-1)] = 1.0f; // Cell 5
-}
-
-void initGridChunks(double* grid) {
-    // Initialize grid to 0 (off)
-    for (int i = 0; i < N; ++i) {
-        for (int j = 0; j < N; ++j) {
-            grid[i * N + j] = 0.0f;
-        }
-    }
-
-    // Randomly activate a block of cells
-    int block_size = N / 4;
-    int start_row = N / 4;
-    int start_col = N / 4;
-    for (int i = start_row; i < start_row + block_size; ++i) {
-        for (int j = start_col; j < start_col + block_size; ++j) {
-            grid[i * N + j] = (rand() % 2);  // Random on/off (1/0) for a small block
-        }
-    }
-}
 
 
-void printGrid(double *C) {
-    for (int i = 0; i < N; i++) {
-        for (int j = 0; j < N; j++) {
-            printf("%.2f ", C[i * N + j]);
-        }
-        printf("\n");
-    }
-}
 
 
-// Map the value to one of the four density characters
-char valueToAscii(double value) {
-    // Define ASCII characters from least dense to most dense
-    const char *density = "░▒▓█";
-    const int numChars = 4;  // Length of the density string
-
-    // Ensure value is between 0 and 1
-    value = fmin(fmax(value, 0.0), 1.0);
-
-    // Map the value to an index in our density string
-    int index = (int)(value * (numChars - 1));
-
-    return density[index];
-}
 
 
-// Map the value to a colored block
-void valueToColor(double value) {
-    // Ensure value is between 0 and 1
-    value = fmin(fmax(value, 0.0), 1.0);
 
-    // Define ANSI color codes for different ranges of values
-    const char *color;
-
-    if (value < 0.25) {
-        color = "\033[48;5;33m"; // Light blue background
-    } else if (value < 0.5) {
-        color = "\033[48;5;39m"; // Green background
-    } else if (value < 0.75) {
-        color = "\033[48;5;226m"; // Yellow background
-    } else {
-        color = "\033[48;5;196m"; // Red background
-    }
-
-    // Print the character with the selected background color
-    printf("%s  ", color); // Print a space for better readability
-    printf("\033[0m"); // Reset color to default
-}
-
-
-void printGridASCII(double *C) {
-    // Clear screen using ANSI escape code
-    printf("\033[2J\033[H");
-
-    // Print top border
-    printf("+");
-    for (int j = 0; j < N; j++) printf("-");
-    printf("+\n");
-
-    // Print grid content
-    for (int i = 0; i < N; i++) {
-        printf("|");  // Left border
-        for (int j = 0; j < N; j++) {
-            valueToColor(C[i * N + j]);
-        }
-        printf("|\n");  // Right border
-    }
-
-    // Print bottom border
-    printf("+");
-    for (int j = 0; j < N; j++) printf("-");
-    printf("+\n");
-
-    // Reset the color back to default after the grid
-    printf("\033[0m");
-}
-
-// ALTERNATIVE APPROACH -- THERMAL COLORING WITH ANSI ESCAPE CODES
-
-// Map the value to a colored block with a thermal gradient
-void valueToThermalColor(double value) {
-    // Ensure value is between 0 and 1
-    value = fmin(fmax(value, 0.0), 1.0);
-
-    // Map the value to an index in the thermal gradient
-    int colorIndex = (int)(value * 255);  // Map to 0-255 for the full spectrum
-
-    // Use ANSI escape codes to apply background color based on the thermal gradient
-    printf("\033[48;5;%dm  ", colorIndex); // Print the colored block
-    printf("\033[0m"); // Reset the color to default
-}
-
-// Print the grid using the thermal gradient colors
-void printGridThermal(double *C) {
-    // Clear screen using ANSI escape code
-    printf("\033[2J\033[H");
-
-    // Print grid content without borders
-    for (int i = 0; i < N; i++) {
-        for (int j = 0; j < N; j++) {
-            valueToThermalColor(C[i * N + j]);  // Print colored block
-        }
-        printf("\n");  // Newline after each row
-    }
-
-    // Reset color back to default after the grid
-    printf("\033[0m");
-}
 
 
 // Helper function: Interpolate between two values
@@ -314,6 +179,7 @@ int main() {
 
     // kernel measured from convolution center with radius, thats why size of kernel arry is 2*RADIUS+1
     size_t kernelSize = (2 * RADIUS + 1) * (2 * RADIUS + 1) * sizeof(double);
+    double kernelMax = 0.0;
 
 
     ha = (double *)malloc(size);
@@ -326,8 +192,8 @@ int main() {
     //initGridGlider(ha);
     initGridChunks(ha);
     double *hostKernel = (double *)malloc(kernelSize);
-    // initGaussianKernel(hostKernel);
-    initDonutKernel(hostKernel, (2 * RADIUS + 1), RADIUS / 2.0, SIGMA);
+    initGaussianKernel(hostKernel , kernelMax);
+    // initDonutKernel(hostKernel, (2 * RADIUS + 1), RADIUS / 2.0, SIGMA);
 
     // Copy data to device
     cudaMemcpy(da, ha, size, cudaMemcpyHostToDevice);
