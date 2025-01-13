@@ -7,5 +7,5 @@ Had to SSH into UM server to access a GPU so some work is still on a remote serv
 
 ### Compilation with GNU Make
 
-To compile and run any project, cd to the dir and enter '''make'''
+To compile and run any project, cd to the dir and enter ```make```
 
